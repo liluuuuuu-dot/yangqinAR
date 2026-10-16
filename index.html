@@ -13,6 +13,7 @@
       width: 100%;
       height: 100%;
       overflow: hidden;
+      touch-action: none;
     }
 
     canvas {
@@ -90,7 +91,7 @@
     renderer="colorManagement: true, physicallyCorrectLights" vr-mode-ui="enabled: false"
     device-orientation-permission-ui="enabled: false">
 
-    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+    <a-camera id="camera" position="0 0 0" look-controls="enabled: false"></a-camera>
 
     <a-entity id="target"
       mindar-image-target="targetIndex: 0; smooth: true; smoothCount: 5; smoothTolerance: 0.01; smoothThreshold: 2">
@@ -114,19 +115,46 @@
   </a-scene>
 
   <script>
+    /* =========================================================
+       1. 找到网页元素
+    ========================================================= */
+
+    const scene = document.querySelector("#scene");
     const startScreen = document.querySelector("#startScreen");
     const startButton = document.querySelector("#startButton");
     const target = document.querySelector("#target");
     const bgMusic = document.querySelector("#bgMusic");
     const narration = document.querySelector("#narration");
     const infoPanel = document.querySelector("#infoPanel");
+    const modelRoot = document.querySelector("#modelRoot");
+    const spinRoot = document.querySelector("#spinRoot");
+
+    /* =========================================================
+       2. 音量
+    ========================================================= */
 
     bgMusic.volume = 0.8;
     narration.volume = 1.0;
 
+    /* =========================================================
+       3. 体验状态
+    ========================================================= */
+
     let experienceStarted = false;
     let targetVisible = false;
     let narrationFinished = false;
+
+    /* 手势交互状态 */
+    let gestureEnabled = false;
+    let currentScale = modelRoot.getAttribute("scale").x;
+    let currentRotationY = 0;
+    const initialScale = currentScale;
+    const minScale = initialScale * 0.3;
+    const maxScale = initialScale * 7.0;
+
+    /* =========================================================
+       4. 开始体验
+    ========================================================= */
 
     startButton.addEventListener("click", async () => {
       try {
@@ -154,6 +182,10 @@
       }
     });
 
+    /* =========================================================
+       5. 播放音频
+    ========================================================= */
+
     function playAudio() {
       if (!experienceStarted) return;
 
@@ -168,9 +200,14 @@
       }
     }
 
+    /* =========================================================
+       6. 识别到 Target
+    ========================================================= */
+
     target.addEventListener("targetFound", () => {
       console.log("🎯 TARGET FOUND");
       targetVisible = true;
+      gestureEnabled = true;
       playAudio();
 
       if (experienceStarted) {
@@ -178,18 +215,128 @@
       }
     });
 
+    /* =========================================================
+       7. Target 离开镜头
+    ========================================================= */
+
     target.addEventListener("targetLost", () => {
       console.log("TARGET LOST");
       targetVisible = false;
+      gestureEnabled = false;
       bgMusic.pause();
       narration.pause();
       infoPanel.style.display = "none";
     });
 
+    /* =========================================================
+       8. 中文讲解结束
+    ========================================================= */
+
     narration.addEventListener("ended", () => {
       narrationFinished = true;
       console.log("🔊 Narration Finished");
     });
+
+    /* =========================================================
+       9. 手势控制：单指旋转 + 双指缩放
+    ========================================================= */
+
+    const activePointers = new Map();
+    let lastSingleX = null;
+    let pinchStartDistance = null;
+    let pinchStartScale = currentScale;
+
+    function getPointerDistance() {
+      const points = Array.from(activePointers.values());
+      if (points.length < 2) return 0;
+      const dx = points[0].x - points[1].x;
+      const dy = points[0].y - points[1].y;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function setModelScale(scale) {
+      currentScale = Math.max(minScale, Math.min(maxScale, scale));
+      modelRoot.setAttribute("scale", `${currentScale} ${currentScale} ${currentScale}`);
+    }
+
+    document.addEventListener("pointerdown", (event) => {
+      if (!gestureEnabled) return;
+
+      if (event.target.closest && event.target.closest("#startScreen, #infoPanel")) {
+        return;
+      }
+
+      activePointers.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY
+      });
+
+      if (activePointers.size === 1) {
+        lastSingleX = event.clientX;
+      }
+
+      if (activePointers.size === 2) {
+        pinchStartDistance = getPointerDistance();
+        pinchStartScale = currentScale;
+        lastSingleX = null;
+      }
+    });
+
+    document.addEventListener("pointermove", (event) => {
+      if (!gestureEnabled || !activePointers.has(event.pointerId)) return;
+
+      activePointers.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY
+      });
+
+      if (activePointers.size === 1 && lastSingleX !== null) {
+        const dx = event.clientX - lastSingleX;
+        currentRotationY += dx * 0.4;
+
+        spinRoot.removeAttribute("animation");
+        spinRoot.setAttribute("rotation", `0 ${currentRotationY} 0`);
+
+        lastSingleX = event.clientX;
+      }
+
+      if (activePointers.size === 2 && pinchStartDistance) {
+        event.preventDefault();
+        const newDistance = getPointerDistance();
+        const ratio = newDistance / pinchStartDistance;
+        setModelScale(pinchStartScale * ratio);
+      }
+    }, { passive: false });
+
+    function endPointer(event) {
+      activePointers.delete(event.pointerId);
+
+      if (activePointers.size === 1) {
+        const remainingPointer = Array.from(activePointers.values())[0];
+        lastSingleX = remainingPointer.x;
+      } else {
+        lastSingleX = null;
+      }
+
+      if (activePointers.size < 2) {
+        pinchStartDistance = null;
+      }
+    }
+
+    document.addEventListener("pointerup", endPointer);
+    document.addEventListener("pointercancel", endPointer);
+
+    /* 电脑鼠标滚轮缩放 */
+    document.addEventListener("wheel", (event) => {
+      if (!gestureEnabled) return;
+      event.preventDefault();
+      if (event.deltaY < 0) {
+        setModelScale(currentScale * 1.10);
+      } else {
+        setModelScale(currentScale * 0.90);
+      }
+    }, { passive: false });
+
   </script>
 
 </body>
